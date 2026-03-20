@@ -99,24 +99,46 @@ class WeChatScraper(BaseFetcher):
                 account_tag = item.select_one("div.s-p a")
                 account = account_tag.get_text(strip=True) if account_tag else "WeChat"
 
-                # Date (often as timestamp in a script tag nearby, or text)
-                date_tag = item.select_one("span.s2")
+                # Date extraction — try multiple strategies
                 published = None
-                if date_tag:
-                    # Try to extract timestamp from date text
-                    date_text = date_tag.get_text(strip=True)
-                    # Sometimes it shows relative time like "1小时前"
-                    if date_text:
-                        try:
-                            # Look for a document.write(timeConvert pattern
-                            script = item.find_next("script")
-                            if script and script.string:
-                                ts_match = re.search(r"timeConvert\('(\d+)'\)", script.string)
-                                if ts_match:
-                                    ts = int(ts_match.group(1))
-                                    published = datetime.fromtimestamp(ts, tz=timezone.utc)
-                        except (ValueError, OSError):
-                            pass
+
+                # Strategy 1: timestamp in nearby script tag (timeConvert pattern)
+                try:
+                    script = item.find_next("script")
+                    if script and script.string:
+                        ts_match = re.search(r"timeConvert\('(\d+)'\)", script.string)
+                        if ts_match:
+                            published = datetime.fromtimestamp(int(ts_match.group(1)), tz=timezone.utc)
+                except (ValueError, OSError):
+                    pass
+
+                # Strategy 2: data-lastmodified or data-t attribute on any element
+                if not published:
+                    for attr in ("data-lastmodified", "data-t", "data-time"):
+                        tag_with_ts = item.find(attrs={attr: True})
+                        if tag_with_ts:
+                            try:
+                                ts = int(tag_with_ts[attr])
+                                published = datetime.fromtimestamp(ts, tz=timezone.utc)
+                                break
+                            except (ValueError, OSError):
+                                continue
+
+                # Strategy 3: any 10-digit timestamp in the item's scripts
+                if not published:
+                    for script in item.find_all("script"):
+                        if script.string:
+                            ts_match = re.search(r"\b(\d{10})\b", script.string)
+                            if ts_match:
+                                try:
+                                    published = datetime.fromtimestamp(int(ts_match.group(1)), tz=timezone.utc)
+                                    break
+                                except (ValueError, OSError):
+                                    continue
+
+                # Strategy 4: fall back to current time (article appeared in search = recent)
+                if not published:
+                    published = datetime.now(timezone.utc)
 
                 text = f"{title} {snippet}"
                 topics = match_topics(text)
