@@ -9,9 +9,8 @@ from sources.rss_fetcher import RSSFetcher
 
 logger = logging.getLogger(__name__)
 
-# Fallback public RSSHub instances (tried in order when primary returns 403)
+# Fallback public RSSHub instances (tried in order when primary fails)
 RSSHUB_FALLBACK_INSTANCES = [
-    "https://rsshub.moeyy.cn",
     "https://hub.slarker.me",
     "https://rsshub.qufy.me",
     "https://rsshub.wkfg.me",
@@ -43,15 +42,14 @@ class RSSHubFetcher(RSSFetcher):
             f"(base: {self.primary_base}, {len(RSSHUB_FALLBACK_INSTANCES)} fallbacks)"
         )
 
-    async def _try_fetch(self, session, url, source):
+    async def _try_fetch(self, session, url):
         """Try fetching a URL, return (status_code, content) or (error_code, None)."""
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=self.timeout)) as resp:
                 if resp.status != 200:
                     return resp.status, None
                 return 200, await resp.text()
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning(f"[{source}] Fetch error for {url}: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError):
             return 0, None
 
     async def _fetch_feed(self, session, feed_info):
@@ -61,7 +59,7 @@ class RSSHubFetcher(RSSFetcher):
         route_path = self._route_map.get(url)
 
         # Try primary
-        status, content = await self._try_fetch(session, url, source)
+        status, content = await self._try_fetch(session, url)
         if status == 200 and content:
             return self._parse_feed(feed_info, content)
 
@@ -74,7 +72,7 @@ class RSSHubFetcher(RSSFetcher):
         # Try fallback instances
         for fallback_base in RSSHUB_FALLBACK_INSTANCES:
             fallback_url = f"{fallback_base}{route_path}"
-            status, content = await self._try_fetch(session, fallback_url, source)
+            status, content = await self._try_fetch(session, fallback_url)
             if status == 200 and content:
                 logger.info(f"[{source}] Fallback succeeded: {fallback_base}")
                 fallback_info = {**feed_info, "url": fallback_url}
