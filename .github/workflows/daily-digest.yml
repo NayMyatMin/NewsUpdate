@@ -52,6 +52,7 @@ jobs:
           git add digests/
           DATE=$(date -u +%Y-%m-%d)
           git diff --cached --quiet || git commit -m "Daily digest: ${DATE}"
+          git pull --rebase origin main
           git push
 
   test:
