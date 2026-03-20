@@ -32,7 +32,7 @@ Output is saved to `digests/YYYY-MM-DD.md`.
 
 ## Configuration
 
-All config lives in `.env`:
+All config lives in `.env` (or GitHub Secrets for CI):
 
 ```bash
 # LLM provider: "openai" (default) or "anthropic"
@@ -40,7 +40,9 @@ LLM_PROVIDER=openai
 
 # OpenAI
 OPENAI_API_KEY=sk-xxxxx
-OPENAI_MODEL=gpt-4o-mini          # cheapest, ~$0.03/day
+OPENAI_MODEL=gpt-4o-mini          # L1 screening model (fast, cheap)
+L2_OPENAI_MODEL=gpt-4o            # L2 deep analysis model (stronger)
+L2_ENABLED=true                   # Set false to use L1 model for everything
 
 # Or use any OpenAI-compatible API (Ollama, vLLM, Azure, etc.)
 # OPENAI_BASE_URL=http://localhost:11434/v1
@@ -48,6 +50,13 @@ OPENAI_MODEL=gpt-4o-mini          # cheapest, ~$0.03/day
 # Anthropic (if LLM_PROVIDER=anthropic)
 # ANTHROPIC_API_KEY=sk-ant-xxxxx
 # ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+# L2_ANTHROPIC_MODEL=claude-sonnet-4-20250514
+
+# Embedding model for cross-lingual deduplication
+EMBEDDING_MODEL=text-embedding-3-small
+
+# RSSHub base URL (default: https://rsshub.app, auto-fallback on 403)
+# RSSHUB_BASE_URL=https://rsshub.app
 
 # Optional: NewsAPI.org for extra international coverage
 # NEWSAPI_KEY=xxxxx
@@ -58,12 +67,14 @@ OPENAI_MODEL=gpt-4o-mini          # cheapest, ~$0.03/day
 ```
 Fetch (55+ sources, async)
   → 1,400+ raw articles
-    → Deduplicate (URL + title similarity)
-      → ~1,350 unique
+    → Deduplicate (URL + cross-lingual embeddings)
+      → ~1,300 unique
         → Keyword relevance filter (17 topic clusters)
           → Top 80 candidates
-            → LLM summarization & ranking
-              → Top 15 digest
+            → L1 LLM screening (fast model)
+              → Top 25 finalists
+                → L2 LLM deep analysis (stronger model)
+                  → Top 15 digest
 ```
 
 **Pipeline stages:**
@@ -71,9 +82,10 @@ Fetch (55+ sources, async)
 | Stage | What it does | Cost |
 |---|---|---|
 | Fetch | Async RSS/scraping from all sources | Free |
-| Dedup | URL + Jaccard title similarity | Free |
+| Dedup | URL + cross-lingual embedding similarity | ~$0.01/day |
 | Filter | Keyword matching across 17 topic clusters | Free |
-| Summarize | LLM scores, summarizes, and ranks | ~$0.03-0.07/day |
+| L1 Screen | Fast LLM scores and filters top candidates | ~$0.02/day |
+| L2 Rank | Stronger LLM deep-analyzes and ranks top articles | ~$0.05/day |
 | Output | Markdown file + terminal display | Free |
 
 ## Sources
@@ -81,7 +93,7 @@ Fetch (55+ sources, async)
 ### International (English)
 
 **AI & ML:**
-TechCrunch AI, Wired AI, MIT Tech Review, The Verge AI, ArXiv (cs.AI, cs.CR, cs.CL), Google AI Blog, OpenAI Blog, Hugging Face Blog, DeepMind Blog, Meta Engineering ML, Apple ML Blog, Microsoft AI Blog, Lil'Log, NLP Newsletter, The Sequence, Import AI
+TechCrunch AI, Wired AI, MIT Tech Review, The Verge AI, ArXiv (cs.AI, cs.CR, cs.CL), Google AI Blog, OpenAI Blog, Hugging Face Blog, DeepMind Blog, Meta Engineering ML, Apple ML Blog, Microsoft AI Blog, Lil'Log, NLP Newsletter, Import AI
 
 **Cybersecurity & Infosec:**
 BleepingComputer, The Hacker News, Dark Reading, SecurityWeek, Krebs on Security, Schneier on Security, CISA, NIST NVD, Cisco Talos, Mandiant, Securelist (Kaspersky), Unit 42 (Palo Alto), SentinelOne Labs, Cloudflare Blog, PortSwigger Research, Google Project Zero
@@ -104,7 +116,10 @@ AI安全, 大模型, 华为, 芯片, AI监管, 网络安全, 安全漏洞, 信�
 AI安全, 大模型安全, 人工智能治理, 华为AI, AI智能体, 大语言模型, AI芯片, 深度伪造, 网络安全事件, 数据泄露, 勒索软件攻击, 安全漏洞, 云计算, 量子计算, 自动驾驶, 科技新闻
 
 **Direct feeds:**
-CLS Telegraph (财联社), FreeBuf, Seebug Paper, Xianzi (先知社区), InfoQ China
+Seebug Paper, Xianzi (先知社区), InfoQ China
+
+**RSSHub (14 routes, auto-fallback on 403):**
+CLS Telegraph (财联社), 36Kr, The Paper (澎湃), Zhihu, V2EX, Jiqizhixin (机器之心), Leiphone (雷锋网), Anquanke (安全客), Bilibili Tech, Weibo
 
 ## Topic Clusters (17)
 
@@ -117,14 +132,29 @@ CLS Telegraph (财联社), FreeBuf, Seebug Paper, Xianzi (先知社区), InfoQ C
 
 ## Cost
 
-| Provider | Model | Daily Cost | Monthly Cost |
-|---|---|---|---|
-| OpenAI | gpt-4o-mini | ~$0.03 | ~$1 |
-| Anthropic | claude-haiku-4-5 | ~$0.07 | ~$2 |
-| OpenAI | gpt-4o | ~$0.50 | ~$15 |
-| Local (Ollama) | any | $0 | $0 |
+| Setup | L1 Model | L2 Model | Daily Cost | Monthly Cost |
+|---|---|---|---|---|
+| Budget | gpt-4o-mini | gpt-4o-mini | ~$0.04 | ~$1.20 |
+| Recommended | gpt-4o-mini | gpt-4o | ~$0.08 | ~$2.50 |
+| Premium | gpt-5-mini | gpt-5-mini | ~$0.06 | ~$1.80 |
+| Anthropic | claude-haiku-4-5 | claude-sonnet-4 | ~$0.10 | ~$3 |
+| Local (Ollama) | any | any | $0 | $0 |
 
-## Run as Daily Cron Job
+*Costs include embedding API calls for cross-lingual deduplication.*
+
+## GitHub Actions (Automated Daily Digest)
+
+The included workflow runs the pipeline daily at 07:00 UTC and commits the digest automatically.
+
+**Setup:**
+1. Go to **Settings → Secrets and variables → Actions**
+2. Add required secrets:
+   - `LLM_PROVIDER` → `openai`
+   - `OPENAI_API_KEY` → your API key
+3. Optionally set `OPENAI_MODEL` and `L2_OPENAI_MODEL` to customize models
+4. Go to **Actions → Daily News Digest → Run workflow** to trigger manually
+
+## Run as Daily Cron Job (Local)
 
 ```bash
 # Edit crontab
@@ -148,13 +178,13 @@ newsupdate/
 ├── sources/
 │   ├── rss_fetcher.py              # Async RSS/Atom feed parser
 │   ├── google_news.py              # Google News RSS search (28 queries)
-│   ├── rsshub_fetcher.py           # Chinese sources via RSSHub
+│   ├── rsshub_fetcher.py           # RSSHub sources with auto-fallback instances
 │   ├── newsapi_fetcher.py          # NewsAPI.org (optional)
 │   └── wechat_scraper.py           # WeChat articles via Sogou search
 ├── processing/
-│   ├── deduplicator.py             # URL + title similarity dedup
+│   ├── deduplicator.py             # URL + cross-lingual embedding dedup
 │   ├── relevance_filter.py         # Keyword-based pre-filter
-│   └── summarizer.py               # LLM summarization (OpenAI / Anthropic)
+│   └── summarizer.py               # Two-tier LLM ranking (L1 screen + L2 deep analysis)
 ├── output/
 │   ├── formatter.py                # Markdown + terminal formatters
 │   └── file_writer.py              # Save digest to file
