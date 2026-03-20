@@ -152,14 +152,28 @@ def _call_openai(
         kwargs["base_url"] = OPENAI_BASE_URL
 
     client = openai.OpenAI(**kwargs)
-    response = client.chat.completions.create(
-        model=model or OPENAI_MODEL,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
+    resolved_model = model or OPENAI_MODEL
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model=resolved_model,
+            max_completion_tokens=max_tokens,
+            messages=messages,
+        )
+    except openai.BadRequestError as e:
+        if "max_completion_tokens" in str(e):
+            # Older model/API that only supports max_tokens
+            response = client.chat.completions.create(
+                model=resolved_model,
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+        else:
+            raise
     return response.choices[0].message.content.strip()
 
 
