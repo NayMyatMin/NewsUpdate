@@ -43,6 +43,14 @@ class RSSFetcher(BaseFetcher):
             logger.warning(f"[{source}] Fetch error: {e}")
             return []
 
+        return self._parse_feed(feed_info, content)
+
+    def _parse_feed(self, feed_info: dict, content: str) -> list[Article]:
+        """Parse RSS/Atom feed content into articles."""
+        source = feed_info["source"]
+        lang = feed_info["lang"]
+        articles = []
+
         parsed = feedparser.parse(content)
         cutoff = datetime.now(timezone.utc) - timedelta(hours=28)  # Slight buffer
 

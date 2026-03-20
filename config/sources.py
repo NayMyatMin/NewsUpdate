@@ -65,7 +65,7 @@ RSS_FEEDS = [
     {"url": "https://blogs.microsoft.com/ai/feed/", "source": "Microsoft AI Blog", "lang": "en"},
     {"url": "https://lilianweng.github.io/index.xml", "source": "Lil'Log (Lilian Weng)", "lang": "en"},
     {"url": "https://newsletter.ruder.io/feed", "source": "NLP Newsletter (Ruder)", "lang": "en"},
-    {"url": "https://thesequence.substack.com/feed", "source": "The Sequence", "lang": "en"},
+    # The Sequence (Substack) blocks bot User-Agents, skipped
     {"url": "https://jack-clark.net/feed/", "source": "Import AI (Jack Clark)", "lang": "en"},
 
     # === Major news outlets ===
@@ -94,7 +94,7 @@ RSS_FEEDS = [
     {"url": "https://googleprojectzero.blogspot.com/feeds/posts/default", "source": "Google Project Zero", "lang": "en"},
 
     # === Chinese cybersecurity (direct RSS) ===
-    {"url": "https://www.freebuf.com/feed", "source": "FreeBuf (安全)", "lang": "zh"},
+    # FreeBuf feed is broken (HTTP 405), skipped
     {"url": "https://paper.seebug.org/rss/", "source": "Seebug Paper", "lang": "zh"},
     {"url": "https://xz.aliyun.com/feed", "source": "Xianzi (先知社区)", "lang": "zh"},
 
