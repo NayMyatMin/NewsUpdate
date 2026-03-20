@@ -1,6 +1,6 @@
 # NewsUpdate Agent
 
-Daily tech news digest powered by AI. Fetches 1,400+ articles from 55+ sources (international + Chinese), deduplicates, filters by relevance, and uses an LLM to rank and summarize the top 15 things you need to know.
+Daily tech news digest powered by AI. Fetches 1,500+ articles from 110 sources (international + Chinese), deduplicates, filters by relevance, and uses an LLM to rank and summarize the top 15 things you need to know.
 
 Built for staying current on AI, cybersecurity, LLMs, AI agents, cloud, hardware, and general tech — from both international and Chinese domestic sources.
 
@@ -65,16 +65,16 @@ EMBEDDING_MODEL=text-embedding-3-small
 ## How It Works
 
 ```
-Fetch (55+ sources, async)
-  → 1,400+ raw articles
+Fetch (110 source configs, async)
+  → 1,500+ raw articles
     → Deduplicate (URL + cross-lingual embeddings)
       → ~1,300 unique
         → Keyword relevance filter (17 topic clusters)
           → Top 80 candidates
             → L1 LLM screening (fast model)
               → Top 25 finalists
-                → L2 LLM deep analysis (stronger model)
-                  → Top 15 digest
+                → L2 LLM deep analysis (8K token budget, backfill guarantee)
+                  → Top 15 digest (always 15 — never truncated)
 ```
 
 **Pipeline stages:**
@@ -118,8 +118,10 @@ AI安全, 大模型安全, 人工智能治理, 华为AI, AI智能体, 大语言�
 **Direct feeds:**
 Seebug Paper, Xianzi (先知社区), InfoQ China
 
-**RSSHub (14 routes, auto-fallback on 403):**
+**RSSHub (14 routes, auto-fallback across 4 public instances):**
 CLS Telegraph (财联社), 36Kr, The Paper (澎湃), Zhihu, V2EX, Jiqizhixin (机器之心), Leiphone (雷锋网), Anquanke (安全客), Bilibili Tech, Weibo
+
+> RSSHub routes automatically try fallback instances (`hub.slarker.me`, `rsshub.qufy.me`, `rsshub.wkfg.me`, `rss.shab.fun`) when the primary instance returns 403 or is unreachable. Failed routes log a single warning instead of per-attempt noise.
 
 ## Topic Clusters (17)
 
@@ -174,13 +176,13 @@ newsupdate/
 ├── config/
 │   ├── settings.py                 # API keys, model config, thresholds
 │   ├── topics.py                   # 17 topic clusters with EN/ZH keywords
-│   └── sources.py                  # 55+ source definitions
+│   └── sources.py                  # 110 source definitions (RSS, Google News, RSSHub, WeChat)
 ├── sources/
 │   ├── rss_fetcher.py              # Async RSS/Atom feed parser
 │   ├── google_news.py              # Google News RSS search (28 queries)
 │   ├── rsshub_fetcher.py           # RSSHub sources with auto-fallback instances
 │   ├── newsapi_fetcher.py          # NewsAPI.org (optional)
-│   └── wechat_scraper.py           # WeChat articles via Sogou search
+│   └── wechat_scraper.py           # WeChat articles via Sogou search (multi-strategy timestamp extraction)
 ├── processing/
 │   ├── deduplicator.py             # URL + cross-lingual embedding dedup
 │   ├── relevance_filter.py         # Keyword-based pre-filter
@@ -242,6 +244,36 @@ OPENAI_API_KEY=ollama
 OPENAI_MODEL=llama3.1
 OPENAI_BASE_URL=http://localhost:11434/v1
 ```
+
+## Recent Improvements
+
+**Two-tier LLM ranking (L1 + L2):**
+- L1 uses a fast/cheap model (e.g. `gpt-4o-mini`) to screen 80 articles down to 25
+- L2 uses a stronger model (e.g. `gpt-4o` or `gpt-5-mini`) for deep analysis and final ranking
+- Set `L2_ENABLED=false` to use a single model for both stages
+
+**Guaranteed top 15 output:**
+- L2 prompt explicitly requires all articles to be returned
+- `max_tokens` increased to 8192 to prevent JSON truncation
+- Any articles the LLM skips are backfilled with L1 scores as fallback
+
+**Cross-lingual embedding deduplication:**
+- Uses OpenAI embeddings (`text-embedding-3-small`) to detect duplicate stories across English and Chinese
+- Catches same-story-different-outlet duplicates that URL dedup misses
+
+**RSSHub fallback resilience:**
+- When the primary RSSHub instance (`rsshub.app`) returns 403 or is unreachable, automatically tries 4 fallback public instances
+- Failed routes log a single clean warning instead of per-attempt noise
+- Removed permanently broken feeds (FreeBuf, The Sequence)
+
+**WeChat timestamp extraction:**
+- 4-strategy extraction: `timeConvert()` script → `data-*` attributes → raw Unix timestamps → current time fallback
+- WeChat articles now always display a publish date in the digest
+
+**GitHub Actions CI/CD:**
+- Automated daily digest at 07:00 UTC with auto-commit to `digests/`
+- Manual trigger via workflow_dispatch
+- All secrets configurable via GitHub Settings
 
 ## License
 
