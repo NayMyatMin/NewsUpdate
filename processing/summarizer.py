@@ -78,6 +78,8 @@ Respond ONLY with a valid JSON array: [{{"index": 0, "relevance_score": 8.5}}, .
 # L2: deep analysis prompt — full summaries for top candidates
 L2_PROMPT_TEMPLATE = """Analyze these {count} high-priority news articles in depth.
 
+IMPORTANT: You MUST return an entry for ALL {count} articles. Do not skip any.
+
 For each article, provide:
 1. relevance_score (0.0-10.0): Final importance score after deep analysis
 2. summary (2-3 sentences): Key facts, technical details, and implications
@@ -91,7 +93,7 @@ Scoring guide:
 Articles:
 {articles_json}
 
-Respond ONLY with a valid JSON array. Each element must have:
+Respond ONLY with a valid JSON array of exactly {count} elements. Each element must have:
 "index", "relevance_score", "summary", "why_important"
 
 Example: [{{"index": 0, "relevance_score": 8.5, "summary": "...", "why_important": "..."}}]"""
@@ -123,21 +125,25 @@ def _strip_code_fences(text: str) -> str:
     return text
 
 
-def _call_anthropic(system: str, user_prompt: str, model: str | None = None) -> str:
+def _call_anthropic(
+    system: str, user_prompt: str, model: str | None = None, max_tokens: int = 4096
+) -> str:
     """Call Anthropic Claude API and return response text."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     message = client.messages.create(
         model=model or ANTHROPIC_MODEL,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user_prompt}],
     )
     return message.content[0].text.strip()
 
 
-def _call_openai(system: str, user_prompt: str, model: str | None = None) -> str:
+def _call_openai(
+    system: str, user_prompt: str, model: str | None = None, max_tokens: int = 4096
+) -> str:
     """Call OpenAI (or compatible) API and return response text."""
     import openai
 
@@ -148,7 +154,7 @@ def _call_openai(system: str, user_prompt: str, model: str | None = None) -> str
     client = openai.OpenAI(**kwargs)
     response = client.chat.completions.create(
         model=model or OPENAI_MODEL,
-        max_tokens=4096,
+        max_tokens=max_tokens,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user_prompt},
@@ -157,12 +163,14 @@ def _call_openai(system: str, user_prompt: str, model: str | None = None) -> str
     return response.choices[0].message.content.strip()
 
 
-def _call_llm(system: str, user_prompt: str, model: str | None = None) -> str:
+def _call_llm(
+    system: str, user_prompt: str, model: str | None = None, max_tokens: int = 4096
+) -> str:
     """Route to the configured LLM provider."""
     if LLM_PROVIDER == "openai":
-        return _call_openai(system, user_prompt, model)
+        return _call_openai(system, user_prompt, model, max_tokens)
     else:
-        return _call_anthropic(system, user_prompt, model)
+        return _call_anthropic(system, user_prompt, model, max_tokens)
 
 
 def _has_api_key() -> bool:
@@ -251,15 +259,23 @@ async def _run_l2_deep_analysis(
     all_scored: list[tuple[float, int, dict]] = []
 
     try:
-        response_text = _call_llm(SYSTEM_PROMPT, prompt, model=l2_model)
+        response_text = _call_llm(SYSTEM_PROMPT, prompt, model=l2_model, max_tokens=8192)
         results = _parse_llm_json(response_text)
 
+        seen_indices = set()
         for item in results:
             idx = item.get("index", 0)
             if idx < len(original_indices):
                 orig_idx = original_indices[idx]
                 score = float(item.get("relevance_score", 0))
                 all_scored.append((score, orig_idx, item))
+                seen_indices.add(idx)
+
+        # Backfill any articles the LLM skipped, using L1 scores
+        for i, (orig_idx, l1_score) in enumerate(zip(original_indices, l1_scores)):
+            if i not in seen_indices:
+                logger.warning(f"L2 skipped article index {i}, backfilling with L1 score {l1_score}")
+                all_scored.append((l1_score, orig_idx, {}))
 
     except json.JSONDecodeError as e:
         logger.error(f"L2 JSON parse error: {e}")
