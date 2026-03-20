@@ -43,7 +43,7 @@ jobs:
           EMBEDDING_MODEL: ${{ secrets.EMBEDDING_MODEL || 'text-embedding-3-small' }}
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
           RSSHUB_BASE_URL: ${{ secrets.RSSHUB_BASE_URL || 'https://rsshub.app' }}
-        run: python main.py 2>&1 | tee logs/run.log
+        run: mkdir -p logs && python main.py 2>&1 | tee logs/run.log
 
       - name: Commit and push digest
         run: |
