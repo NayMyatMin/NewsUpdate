@@ -4,10 +4,19 @@ NewsUpdate Agent — Daily AI Safety News Digest
 Fetches, deduplicates, filters, summarizes, and ranks the top news
 for an AI Safety researcher at Huawei.
 
+Pipeline:
+    1. Fetch from 55+ sources (async parallel)
+    2. Deduplicate (URL exact + cross-lingual embedding similarity)
+    3. Pre-filter by keyword relevance (cost control gate)
+    4. Two-tier LLM ranking:
+       L1 — cheap model scores all filtered articles
+       L2 — strong model deeply analyzes L1 survivors
+    5. Output digest to file + terminal
+
 Usage:
     python main.py                    # Full pipeline
-    python main.py --dry-run          # Fetch + filter only (no Claude API call)
-    python main.py --top 15           # Return top 15 instead of 10
+    python main.py --dry-run          # Fetch + filter only (no LLM API call)
+    python main.py --top 15           # Return top 15 instead of default
     python main.py --output terminal  # Print to terminal instead of saving file
 """
 
@@ -20,9 +29,10 @@ from datetime import datetime, timezone
 from config.settings import (
     LLM_PROVIDER,
     FETCH_TIMEOUT_SECONDS,
-    MAX_ARTICLES_TO_CLAUDE,
+    MAX_ARTICLES_TO_L1,
     RELEVANCE_KEYWORD_MIN_SCORE,
     TOP_N_OUTPUT,
+    L2_ENABLED,
 )
 from models.article import Digest
 from sources.google_news import GoogleNewsFetcher
@@ -80,6 +90,8 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     """Execute the full news aggregation pipeline."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     logger.info(f"=== NewsUpdate Agent — {today} ===")
+    if L2_ENABLED:
+        logger.info("Two-tier LLM mode: L1 (screening) + L2 (deep analysis)")
 
     # Step 1: Fetch
     logger.info("Step 1/5: Fetching from all sources...")
@@ -91,8 +103,8 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         logger.warning("No articles fetched! Check your internet connection and source configs.")
         return
 
-    # Step 2: Deduplicate
-    logger.info("Step 2/5: Deduplicating...")
+    # Step 2: Deduplicate (embedding-based cross-lingual dedup)
+    logger.info("Step 2/5: Deduplicating (cross-lingual)...")
     articles = deduplicate(articles)
     total_after_dedup = len(articles)
 
@@ -101,7 +113,7 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     articles = filter_by_relevance(
         articles,
         min_score=RELEVANCE_KEYWORD_MIN_SCORE,
-        max_articles=MAX_ARTICLES_TO_CLAUDE,
+        max_articles=MAX_ARTICLES_TO_L1,
     )
     total_after_filter = len(articles)
 
@@ -109,15 +121,15 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         logger.warning("No articles passed relevance filter! Consider lowering RELEVANCE_KEYWORD_MIN_SCORE.")
         return
 
-    # Step 4: Summarize and rank with LLM
+    # Step 4: Two-tier LLM ranking
     top_n = args.top if hasattr(args, "top") else TOP_N_OUTPUT
 
     if args.dry_run:
-        logger.info("Step 4/5: DRY RUN — skipping LLM API call")
+        logger.info("Step 4/5: DRY RUN — skipping LLM API calls")
         from processing.summarizer import _fallback_rank
         ranked = _fallback_rank(articles, top_n)
     else:
-        logger.info(f"Step 4/5: Summarizing {len(articles)} articles with {LLM_PROVIDER}...")
+        logger.info(f"Step 4/5: Two-tier ranking {len(articles)} articles with {LLM_PROVIDER}...")
         ranked = await summarize_and_rank(articles, top_n=top_n)
 
     # Step 5: Output
@@ -148,7 +160,7 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Fetch and filter only, skip Claude API summarization",
+        help="Fetch and filter only, skip LLM summarization",
     )
     parser.add_argument(
         "--top",

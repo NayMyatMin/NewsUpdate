@@ -1,3 +1,14 @@
+"""
+Two-tier LLM summarization and ranking.
+
+L1 (cheap model): Fast screening of all filtered articles. Scores 0-10,
+   keeps only articles scoring >= 5.0 for deeper analysis.
+L2 (strong model): Deep analysis of L1 survivors. Generates detailed
+   summaries and final ranking.
+
+Falls back to keyword-only ranking when no API key is configured.
+"""
+
 import json
 import logging
 
@@ -8,6 +19,10 @@ from config.settings import (
     OPENAI_API_KEY,
     OPENAI_MODEL,
     OPENAI_BASE_URL,
+    L2_ENABLED,
+    L2_OPENAI_MODEL,
+    L2_ANTHROPIC_MODEL,
+    L1_PASS_COUNT,
 )
 from models.article import Article, RankedArticle
 
@@ -44,15 +59,12 @@ Be especially attentive to:
 6. Major model releases or capability breakthroughs
 7. Critical infrastructure outages or cloud incidents"""
 
-BATCH_PROMPT_TEMPLATE = """Evaluate the following {count} news articles from the past 24 hours.
-
-For each article, provide:
-1. relevance_score (0.0-10.0): How important for a tech-savvy AI safety researcher at Huawei
-2. summary (2-3 sentences): Key facts and implications
-3. why_important (1 sentence): Why this matters
+# L1: fast screening prompt — only needs a score, no summaries
+L1_PROMPT_TEMPLATE = """Quickly evaluate these {count} news articles. For each, provide ONLY:
+- relevance_score (0.0-10.0): How important for a tech-savvy AI safety researcher at Huawei
 
 Scoring guide:
-- 9-10: Active security incident, critical AI safety breakthrough, major Huawei news, or critical zero-day
+- 9-10: Active security incident, critical AI safety breakthrough, major Huawei news, critical zero-day
 - 7-8: Significant AI advance, new vulnerability/CVE, important regulatory action, major breach
 - 5-6: Notable tech industry news, cloud/infra updates, interesting research
 - 3-4: Minor tech updates, tangential news
@@ -61,14 +73,31 @@ Scoring guide:
 Articles:
 {articles_json}
 
-Respond ONLY with a valid JSON array. Each element must have these exact keys:
+Respond ONLY with a valid JSON array: [{{"index": 0, "relevance_score": 8.5}}, ...]"""
+
+# L2: deep analysis prompt — full summaries for top candidates
+L2_PROMPT_TEMPLATE = """Analyze these {count} high-priority news articles in depth.
+
+For each article, provide:
+1. relevance_score (0.0-10.0): Final importance score after deep analysis
+2. summary (2-3 sentences): Key facts, technical details, and implications
+3. why_important (1 sentence): Why this specifically matters for AI safety research at Huawei
+
+Scoring guide:
+- 9-10: Active security incident, critical AI safety breakthrough, major Huawei news, or critical zero-day
+- 7-8: Significant AI advance, new vulnerability/CVE, important regulatory action, major breach
+- 5-6: Notable tech industry news, cloud/infra updates, interesting research
+
+Articles:
+{articles_json}
+
+Respond ONLY with a valid JSON array. Each element must have:
 "index", "relevance_score", "summary", "why_important"
 
-Example format:
-[{{"index": 0, "relevance_score": 8.5, "summary": "...", "why_important": "..."}}]"""
+Example: [{{"index": 0, "relevance_score": 8.5, "summary": "...", "why_important": "..."}}]"""
 
 
-def _format_articles_for_prompt(articles: list[Article]) -> str:
+def _format_articles_for_prompt(articles: list[Article], max_snippet: int = 300) -> str:
     """Format articles as a numbered JSON list for the prompt."""
     items = []
     for i, a in enumerate(articles):
@@ -77,7 +106,7 @@ def _format_articles_for_prompt(articles: list[Article]) -> str:
             "title": a.title,
             "source": a.source,
             "language": a.language,
-            "snippet": (a.snippet or "")[:300],
+            "snippet": (a.snippet or "")[:max_snippet],
             "url": a.url,
         })
     return json.dumps(items, ensure_ascii=False, indent=2)
@@ -94,13 +123,13 @@ def _strip_code_fences(text: str) -> str:
     return text
 
 
-def _call_anthropic(system: str, user_prompt: str) -> str:
+def _call_anthropic(system: str, user_prompt: str, model: str | None = None) -> str:
     """Call Anthropic Claude API and return response text."""
     import anthropic
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     message = client.messages.create(
-        model=ANTHROPIC_MODEL,
+        model=model or ANTHROPIC_MODEL,
         max_tokens=4096,
         system=system,
         messages=[{"role": "user", "content": user_prompt}],
@@ -108,7 +137,7 @@ def _call_anthropic(system: str, user_prompt: str) -> str:
     return message.content[0].text.strip()
 
 
-def _call_openai(system: str, user_prompt: str) -> str:
+def _call_openai(system: str, user_prompt: str, model: str | None = None) -> str:
     """Call OpenAI (or compatible) API and return response text."""
     import openai
 
@@ -118,7 +147,7 @@ def _call_openai(system: str, user_prompt: str) -> str:
 
     client = openai.OpenAI(**kwargs)
     response = client.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=model or OPENAI_MODEL,
         max_tokens=4096,
         messages=[
             {"role": "system", "content": system},
@@ -128,12 +157,12 @@ def _call_openai(system: str, user_prompt: str) -> str:
     return response.choices[0].message.content.strip()
 
 
-def _call_llm(system: str, user_prompt: str) -> str:
+def _call_llm(system: str, user_prompt: str, model: str | None = None) -> str:
     """Route to the configured LLM provider."""
     if LLM_PROVIDER == "openai":
-        return _call_openai(system, user_prompt)
+        return _call_openai(system, user_prompt, model)
     else:
-        return _call_anthropic(system, user_prompt)
+        return _call_anthropic(system, user_prompt, model)
 
 
 def _has_api_key() -> bool:
@@ -143,64 +172,163 @@ def _has_api_key() -> bool:
     return bool(ANTHROPIC_API_KEY)
 
 
+def _parse_llm_json(response_text: str) -> list[dict]:
+    """Parse LLM response as JSON array, handling common issues."""
+    cleaned = _strip_code_fences(response_text)
+    return json.loads(cleaned)
+
+
+async def _run_l1_screening(
+    articles: list[Article],
+    batch_size: int = 25,
+) -> list[tuple[float, int]]:
+    """
+    L1: Fast screening with cheap model.
+    Returns list of (score, original_index) for all articles.
+    """
+    l1_model = OPENAI_MODEL if LLM_PROVIDER == "openai" else ANTHROPIC_MODEL
+    logger.info(f"L1 screening {len(articles)} articles with {l1_model}")
+
+    all_scored: list[tuple[float, int]] = []
+
+    for batch_start in range(0, len(articles), batch_size):
+        batch = articles[batch_start : batch_start + batch_size]
+        # L1 only needs title + short snippet for speed
+        articles_json = _format_articles_for_prompt(batch, max_snippet=200)
+
+        prompt = L1_PROMPT_TEMPLATE.format(
+            count=len(batch),
+            articles_json=articles_json,
+        )
+
+        try:
+            response_text = _call_llm(SYSTEM_PROMPT, prompt, model=l1_model)
+            results = _parse_llm_json(response_text)
+
+            for item in results:
+                idx = item.get("index", 0)
+                global_idx = batch_start + idx
+                score = float(item.get("relevance_score", 0))
+                all_scored.append((score, global_idx))
+
+        except json.JSONDecodeError as e:
+            logger.error(f"L1 JSON parse error: {e}")
+            for i in range(len(batch)):
+                all_scored.append((0, batch_start + i))
+        except Exception as e:
+            logger.error(f"L1 API error: {e}")
+            for i in range(len(batch)):
+                all_scored.append((0, batch_start + i))
+
+    return all_scored
+
+
+async def _run_l2_deep_analysis(
+    articles: list[Article],
+    original_indices: list[int],
+    l1_scores: list[float],
+) -> list[tuple[float, int, dict]]:
+    """
+    L2: Deep analysis with strong model on L1 survivors.
+    Returns list of (score, original_index, llm_result).
+    """
+    l2_model = None
+    if L2_ENABLED:
+        l2_model = L2_OPENAI_MODEL if LLM_PROVIDER == "openai" else L2_ANTHROPIC_MODEL
+        logger.info(f"L2 deep analysis on {len(articles)} articles with {l2_model}")
+    else:
+        l2_model = OPENAI_MODEL if LLM_PROVIDER == "openai" else ANTHROPIC_MODEL
+        logger.info(f"L2 disabled, using L1 model {l2_model} for summaries")
+
+    # L2 gets full snippet for deeper analysis
+    articles_json = _format_articles_for_prompt(articles, max_snippet=500)
+
+    prompt = L2_PROMPT_TEMPLATE.format(
+        count=len(articles),
+        articles_json=articles_json,
+    )
+
+    all_scored: list[tuple[float, int, dict]] = []
+
+    try:
+        response_text = _call_llm(SYSTEM_PROMPT, prompt, model=l2_model)
+        results = _parse_llm_json(response_text)
+
+        for item in results:
+            idx = item.get("index", 0)
+            if idx < len(original_indices):
+                orig_idx = original_indices[idx]
+                score = float(item.get("relevance_score", 0))
+                all_scored.append((score, orig_idx, item))
+
+    except json.JSONDecodeError as e:
+        logger.error(f"L2 JSON parse error: {e}")
+        # Fall back to L1 scores with no summaries
+        for i, (orig_idx, l1_score) in enumerate(zip(original_indices, l1_scores)):
+            all_scored.append((l1_score, orig_idx, {}))
+    except Exception as e:
+        logger.error(f"L2 API error: {e}")
+        for i, (orig_idx, l1_score) in enumerate(zip(original_indices, l1_scores)):
+            all_scored.append((l1_score, orig_idx, {}))
+
+    return all_scored
+
+
 async def summarize_and_rank(
     articles: list[Article],
-    top_n: int = 10,
+    top_n: int = 15,
     batch_size: int = 25,
 ) -> list[RankedArticle]:
     """
-    Send articles to LLM for summarization and ranking.
-    Supports both Anthropic and OpenAI providers.
-    Processes in batches to stay within token limits.
-    Returns top_n ranked articles.
+    Two-tier LLM summarization and ranking.
+
+    L1: Cheap model screens all articles (score only, no summaries).
+    L2: Strong model deeply analyzes top L1 survivors (full summaries).
+
+    Falls back to keyword ranking when no API key is configured.
     """
     if not _has_api_key():
         provider = LLM_PROVIDER.upper()
         logger.error(f"{provider} API key not set! Cannot summarize.")
         return _fallback_rank(articles, top_n)
 
-    model = OPENAI_MODEL if LLM_PROVIDER == "openai" else ANTHROPIC_MODEL
-    logger.info(f"Using LLM provider: {LLM_PROVIDER} (model: {model})")
+    model_info = f"{LLM_PROVIDER}"
+    if L2_ENABLED:
+        l1_model = OPENAI_MODEL if LLM_PROVIDER == "openai" else ANTHROPIC_MODEL
+        l2_model = L2_OPENAI_MODEL if LLM_PROVIDER == "openai" else L2_ANTHROPIC_MODEL
+        model_info = f"L1={l1_model}, L2={l2_model}"
+    logger.info(f"Two-tier ranking: {model_info}")
 
-    all_scored: list[tuple[float, int, dict]] = []
+    # --- L1: Fast screening ---
+    l1_results = await _run_l1_screening(articles, batch_size=batch_size)
 
-    # Process in batches
-    for batch_start in range(0, len(articles), batch_size):
-        batch = articles[batch_start : batch_start + batch_size]
-        articles_json = _format_articles_for_prompt(batch)
+    # Sort by L1 score, take top candidates for L2
+    l1_results.sort(key=lambda x: x[0], reverse=True)
+    l1_pass_count = min(L1_PASS_COUNT, len(l1_results))
+    l1_survivors = l1_results[:l1_pass_count]
 
-        prompt = BATCH_PROMPT_TEMPLATE.format(
-            count=len(batch),
-            articles_json=articles_json,
-        )
+    logger.info(
+        f"L1 screening complete: {len(l1_results)} scored, "
+        f"top {l1_pass_count} passed to L2 "
+        f"(score range: {l1_survivors[-1][0]:.1f}-{l1_survivors[0][0]:.1f})"
+    )
 
-        try:
-            response_text = _call_llm(SYSTEM_PROMPT, prompt)
-            response_text = _strip_code_fences(response_text)
-            results = json.loads(response_text)
+    # Build L2 input
+    l2_articles = [articles[idx] for _, idx in l1_survivors]
+    l2_orig_indices = [idx for _, idx in l1_survivors]
+    l2_l1_scores = [score for score, _ in l1_survivors]
 
-            for item in results:
-                idx = item.get("index", 0)
-                global_idx = batch_start + idx
-                score = float(item.get("relevance_score", 0))
-                all_scored.append((score, global_idx, item))
+    # --- L2: Deep analysis ---
+    l2_results = await _run_l2_deep_analysis(
+        l2_articles, l2_orig_indices, l2_l1_scores
+    )
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse LLM response as JSON: {e}")
-            logger.debug(f"Response was: {response_text[:500]}")
-            for i in range(len(batch)):
-                all_scored.append((0, batch_start + i, {}))
-        except Exception as e:
-            logger.error(f"LLM API error: {e}")
-            for i in range(len(batch)):
-                all_scored.append((0, batch_start + i, {}))
+    # Sort by L2 score
+    l2_results.sort(key=lambda x: x[0], reverse=True)
 
-    # Sort by relevance score descending
-    all_scored.sort(key=lambda x: x[0], reverse=True)
-
-    # Build top-N ranked articles
+    # Build final ranked articles
     ranked = []
-    for rank, (score, idx, llm_result) in enumerate(all_scored[:top_n], 1):
+    for rank, (score, idx, llm_result) in enumerate(l2_results[:top_n], 1):
         if idx < len(articles):
             a = articles[idx]
             ranked.append(RankedArticle(
@@ -216,7 +344,7 @@ async def summarize_and_rank(
                 topic_matches=a.topic_matches,
             ))
 
-    logger.info(f"Summarized {len(articles)} articles, returning top {len(ranked)}")
+    logger.info(f"Two-tier ranking complete: returning top {len(ranked)} articles")
     return ranked
 
 

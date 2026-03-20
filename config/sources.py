@@ -118,10 +118,32 @@ RSS_FEEDS = [
 ]
 
 # ============================================================
-# RSSHub routes (only verified working ones)
+# RSSHub routes — Chinese platform coverage
+# RSSHub converts walled-garden platforms to standard RSS.
+# Works with public instances or self-hosted (set RSSHUB_BASE_URL).
 # ============================================================
 RSSHUB_ROUTES = [
-    {"route": "/cls/telegraph", "source": "CLS Telegraph", "lang": "zh"},
+    # --- News & Finance ---
+    {"route": "/cls/telegraph", "source": "CLS Telegraph (财联社)", "lang": "zh"},
+    {"route": "/36kr/newsflashes", "source": "36Kr Newsflash (36氪快讯)", "lang": "zh"},
+    {"route": "/36kr/information/web_news", "source": "36Kr Tech News (36氪)", "lang": "zh"},
+    {"route": "/thepaper/channel/25950", "source": "The Paper Tech (澎湃科技)", "lang": "zh"},
+
+    # --- AI & Tech communities ---
+    {"route": "/zhihu/hotlist", "source": "Zhihu Hot (知乎热榜)", "lang": "zh"},
+    {"route": "/zhihu/topic/19551275", "source": "Zhihu AI Topic (知乎AI)", "lang": "zh"},
+    {"route": "/v2ex/topics/latest", "source": "V2EX Latest", "lang": "zh"},
+    {"route": "/jiqizhixin/daily", "source": "Synced/Jiqizhixin (机器之心)", "lang": "zh"},
+    {"route": "/leiphone/category/ai", "source": "Leiphone AI (雷锋网AI)", "lang": "zh"},
+
+    # --- Cybersecurity ---
+    {"route": "/anquanke/category/web安全", "source": "Anquanke (安全客)", "lang": "zh"},
+    {"route": "/hackernews/best", "source": "HN Best Stories", "lang": "en"},
+
+    # --- Video/Social platforms (tech channels) ---
+    {"route": "/bilibili/ranking/technology/0/3", "source": "Bilibili Tech (B站科技)", "lang": "zh"},
+    {"route": "/weibo/keyword/AI安全", "source": "Weibo #AI安全#", "lang": "zh"},
+    {"route": "/weibo/keyword/网络安全", "source": "Weibo #网络安全#", "lang": "zh"},
 ]
 
 # ============================================================
