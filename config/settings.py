@@ -38,7 +38,8 @@ MAX_ARTICLES_TO_L1 = 80           # Max articles sent to L1 (cheap) LLM screenin
 L1_PASS_COUNT = 25                # Articles that survive L1 for L2 deep scoring
 TOP_N_OUTPUT = 15                 # Number of items in final digest
 FETCH_TIMEOUT_SECONDS = 30        # Per-source fetch timeout
-DEDUP_SIMILARITY_THRESHOLD = 0.82 # Cosine similarity for embedding dedup
+DEDUP_SIMILARITY_THRESHOLD = 0.82 # Cosine similarity for embedding dedup (pre-ranking)
+EVENT_DEDUP_THRESHOLD = float(os.getenv("EVENT_DEDUP_THRESHOLD", "0.55"))  # Post-ranking same-event dedup (lower = stricter)
 RELEVANCE_KEYWORD_MIN_SCORE = 1.5 # Minimum keyword score to pass pre-filter
 
 # Output paths

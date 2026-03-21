@@ -23,8 +23,10 @@ from config.settings import (
     L2_OPENAI_MODEL,
     L2_ANTHROPIC_MODEL,
     L1_PASS_COUNT,
+    EVENT_DEDUP_THRESHOLD,
 )
 from models.article import Article, RankedArticle
+from processing.deduplicator import _get_embeddings, _cosine_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +306,73 @@ async def _run_l2_deep_analysis(
     return all_scored
 
 
+def _dedup_by_event(
+    scored_results: list[tuple[float, int, dict]],
+    articles: list[Article],
+    similarity_threshold: float,
+) -> list[tuple[float, int, dict]]:
+    """
+    Post-L2 event-level dedup: remove articles covering the same event.
+
+    Iterates results in score order (highest first). For each article, checks
+    embedding similarity of its title against all already-kept articles. If too
+    similar to any kept article, it's skipped as a duplicate event.
+    """
+    if not scored_results:
+        return scored_results
+
+    # Build title texts for embedding (title + short summary for better matching)
+    texts = []
+    for score, idx, llm_result in scored_results:
+        title = articles[idx].title if idx < len(articles) else ""
+        summary = llm_result.get("summary", "")[:150]
+        texts.append(f"{title} {summary}".strip())
+
+    embeddings = _get_embeddings(texts)
+
+    if embeddings is None:
+        # Fallback: simple title-token overlap dedup
+        logger.info("No embeddings for event dedup, falling back to title overlap")
+        kept: list[tuple[float, int, dict]] = []
+        kept_title_tokens: list[set[str]] = []
+        for i, (score, idx, llm_result) in enumerate(scored_results):
+            title = articles[idx].title if idx < len(articles) else ""
+            tokens = set(title.lower().split())
+            is_dup = False
+            for existing in kept_title_tokens:
+                if tokens and existing:
+                    overlap = len(tokens & existing) / len(tokens | existing)
+                    if overlap > 0.4:
+                        is_dup = True
+                        break
+            if not is_dup:
+                kept.append((score, idx, llm_result))
+                kept_title_tokens.append(tokens)
+        logger.info(f"Event dedup (title fallback): {len(scored_results)} -> {len(kept)}")
+        return kept
+
+    # Greedy dedup using embeddings: keep if not too similar to any already-kept
+    kept = []
+    kept_embeddings: list[list[float]] = []
+
+    for i, (score, idx, llm_result) in enumerate(scored_results):
+        emb = embeddings[i]
+        is_dup = False
+        for kept_emb in kept_embeddings:
+            if _cosine_similarity(emb, kept_emb) > similarity_threshold:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append((score, idx, llm_result))
+            kept_embeddings.append(emb)
+        else:
+            title = articles[idx].title[:80] if idx < len(articles) else "?"
+            logger.info(f"Event dedup: dropped duplicate event — {title}")
+
+    logger.info(f"Event dedup (embedding): {len(scored_results)} -> {len(kept)}")
+    return kept
+
+
 async def summarize_and_rank(
     articles: list[Article],
     top_n: int = 15,
@@ -355,6 +424,11 @@ async def summarize_and_rank(
 
     # Sort by L2 score
     l2_results.sort(key=lambda x: x[0], reverse=True)
+
+    # --- Event-level dedup: keep only the best article per event ---
+    l2_results = _dedup_by_event(
+        l2_results, articles, similarity_threshold=EVENT_DEDUP_THRESHOLD
+    )
 
     # Build final ranked articles
     ranked = []
