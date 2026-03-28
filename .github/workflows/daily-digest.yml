@@ -30,6 +30,9 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --tb=short
 
+      - name: Archive completed weeks
+        run: bash scripts/organize_digests.sh
+
       - name: Generate daily digest
         env:
           LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
