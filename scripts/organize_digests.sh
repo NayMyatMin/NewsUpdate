@@ -8,13 +8,17 @@
 
 set -euo pipefail
 
-DIGEST_DIR="$(cd "$(dirname "$0")/../digests" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DIGEST_DIR="$(cd "$SCRIPT_DIR/../digests" && pwd)"
 
 # Get today's date and the Monday of the current week (in UTC)
 today=$(date -u +%Y-%m-%d)
 # day_of_week: 1=Monday ... 7=Sunday
 day_of_week=$(date -u -d "$today" +%u)
 current_week_monday=$(date -u -d "$today -$((day_of_week - 1)) days" +%Y-%m-%d)
+
+# Track which week folders received new files
+declare -A new_week_dirs
 
 # Find all markdown digest files in the flat digests/ directory
 for file in "$DIGEST_DIR"/????-??-??.md; do
@@ -39,4 +43,14 @@ for file in "$DIGEST_DIR"/????-??-??.md; do
     mkdir -p "$week_dir"
     mv "$file" "$week_dir/"
     echo "Moved $filename.md -> ${file_monday}_to_${file_sunday}/"
+
+    new_week_dirs["$week_dir"]=1
+done
+
+# Generate weekly summary for each newly archived week
+for week_dir in "${!new_week_dirs[@]}"; do
+    if [ ! -f "$week_dir/weekly-summary.md" ]; then
+        echo "Generating weekly summary for $(basename "$week_dir")..."
+        python3 "$SCRIPT_DIR/generate_weekly_summary.py" "$week_dir"
+    fi
 done
