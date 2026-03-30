@@ -10,6 +10,7 @@ def format_digest_markdown(digest: Digest) -> str:
         (
             f"*Generated at {digest.generated_at.strftime('%H:%M UTC')} | "
             f"{digest.total_fetched} articles fetched | "
+            f"{digest.total_after_freshness} after freshness filter | "
             f"{digest.total_after_dedup} after dedup | "
             f"{digest.total_after_filter} analyzed | "
             f"Top {len(digest.top_articles)} below*"
@@ -56,7 +57,8 @@ def format_digest_terminal(digest: Digest) -> str:
     lines = [
         f"\n{'='*70}",
         f"  AI SAFETY NEWS DIGEST — {digest.date}",
-        f"  {digest.total_fetched} fetched → {digest.total_after_dedup} deduped → "
+        f"  {digest.total_fetched} fetched → {digest.total_after_freshness} fresh → "
+        f"{digest.total_after_dedup} deduped → "
         f"{digest.total_after_filter} analyzed → Top {len(digest.top_articles)}",
         f"{'='*70}\n",
     ]

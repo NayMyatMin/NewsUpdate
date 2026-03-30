@@ -41,6 +41,7 @@ FETCH_TIMEOUT_SECONDS = 30        # Per-source fetch timeout
 DEDUP_SIMILARITY_THRESHOLD = 0.82 # Cosine similarity for embedding dedup (pre-ranking)
 EVENT_DEDUP_THRESHOLD = float(os.getenv("EVENT_DEDUP_THRESHOLD", "0.55"))  # Post-ranking same-event dedup (lower = stricter)
 RELEVANCE_KEYWORD_MIN_SCORE = 1.5 # Minimum keyword score to pass pre-filter
+MAX_ARTICLE_AGE_HOURS = int(os.getenv("MAX_ARTICLE_AGE_HOURS", "48"))  # Discard articles older than this
 
 # Output paths
 DIGESTS_DIR = PROJECT_ROOT / "digests"

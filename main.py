@@ -6,12 +6,13 @@ for an AI Safety researcher at Huawei.
 
 Pipeline:
     1. Fetch from 55+ sources (async parallel)
-    2. Deduplicate (URL exact + cross-lingual embedding similarity)
-    3. Pre-filter by keyword relevance (cost control gate)
-    4. Two-tier LLM ranking:
+    2. Freshness filter (discard articles older than MAX_ARTICLE_AGE_HOURS)
+    3. Deduplicate (URL exact + cross-lingual embedding similarity)
+    4. Pre-filter by keyword relevance (cost control gate)
+    5. Two-tier LLM ranking:
        L1 — cheap model scores all filtered articles
        L2 — strong model deeply analyzes L1 survivors
-    5. Output digest to file + terminal
+    6. Output digest to file + terminal
 
 Usage:
     python main.py                    # Full pipeline
@@ -42,6 +43,7 @@ from sources.newsapi_fetcher import NewsAPIFetcher
 from sources.wechat_scraper import WeChatScraper
 from config.sources import RSS_FEEDS
 from processing.deduplicator import deduplicate
+from processing.freshness_filter import filter_by_freshness
 from processing.relevance_filter import filter_by_relevance
 from processing.summarizer import summarize_and_rank
 from output.formatter import format_digest_terminal, format_digest_markdown
@@ -103,13 +105,22 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         logger.warning("No articles fetched! Check your internet connection and source configs.")
         return
 
-    # Step 2: Deduplicate (embedding-based cross-lingual dedup)
-    logger.info("Step 2/5: Deduplicating (cross-lingual)...")
+    # Step 2: Freshness filter (discard stale articles)
+    logger.info("Step 2/6: Filtering by freshness...")
+    articles = filter_by_freshness(articles)
+    total_after_freshness = len(articles)
+
+    if not articles:
+        logger.warning("No articles passed freshness filter! All fetched articles are too old.")
+        return
+
+    # Step 3: Deduplicate (embedding-based cross-lingual dedup)
+    logger.info("Step 3/6: Deduplicating (cross-lingual)...")
     articles = deduplicate(articles)
     total_after_dedup = len(articles)
 
-    # Step 3: Pre-filter by keyword relevance
-    logger.info("Step 3/5: Filtering by relevance...")
+    # Step 4: Pre-filter by keyword relevance
+    logger.info("Step 4/6: Filtering by relevance...")
     articles = filter_by_relevance(
         articles,
         min_score=RELEVANCE_KEYWORD_MIN_SCORE,
@@ -121,23 +132,24 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         logger.warning("No articles passed relevance filter! Consider lowering RELEVANCE_KEYWORD_MIN_SCORE.")
         return
 
-    # Step 4: Two-tier LLM ranking
+    # Step 5: Two-tier LLM ranking
     top_n = args.top if hasattr(args, "top") else TOP_N_OUTPUT
 
     if args.dry_run:
-        logger.info("Step 4/5: DRY RUN — skipping LLM API calls")
+        logger.info("Step 5/6: DRY RUN — skipping LLM API calls")
         from processing.summarizer import _fallback_rank
         ranked = _fallback_rank(articles, top_n)
     else:
-        logger.info(f"Step 4/5: Two-tier ranking {len(articles)} articles with {LLM_PROVIDER}...")
+        logger.info(f"Step 5/6: Two-tier ranking {len(articles)} articles with {LLM_PROVIDER}...")
         ranked = await summarize_and_rank(articles, top_n=top_n)
 
-    # Step 5: Output
-    logger.info("Step 5/5: Generating digest...")
+    # Step 6: Output
+    logger.info("Step 6/6: Generating digest...")
     digest = Digest(
         date=today,
         generated_at=datetime.now(timezone.utc),
         total_fetched=total_fetched,
+        total_after_freshness=total_after_freshness,
         total_after_dedup=total_after_dedup,
         total_after_filter=total_after_filter,
         top_articles=ranked,
