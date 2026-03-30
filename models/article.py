@@ -30,6 +30,7 @@ class Digest(BaseModel):
     date: str
     generated_at: datetime
     total_fetched: int
+    total_after_freshness: int = 0
     total_after_dedup: int
     total_after_filter: int
     top_articles: list[RankedArticle]
