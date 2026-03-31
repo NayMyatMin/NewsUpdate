@@ -80,15 +80,18 @@ IMPORTANT: You MUST return an entry for ALL {count} articles. Do not skip any.
 For each article, provide:
 1. relevance_score (0.0-10.0): Final importance score after deep analysis
 2. section: Categorize into EXACTLY ONE of these sections:
+   - "threats_incidents": Real-world active attacks, data breaches, ransomware, jailbreaks, prompt
+     injection exploits, CVEs, safety failures, vulnerability disclosures, security incidents.
+     ONLY for real-world news/incidents, NOT academic papers.
    - "ai_security_industry": AI safety/security announcements, tools, features, guardrail releases
      from major companies (Google, OpenAI, Meta, Anthropic, Huawei, Microsoft, Alibaba, ByteDance,
-     DeepSeek, etc.). Only include if the news has a direct AI safety/security angle.
+     DeepSeek, etc.). Only for real-world product/company news, NOT academic papers.
    - "ai_agents_os": AI agent features from OS platforms (Apple/iOS, Android, Windows, HarmonyOS),
      agent frameworks, platform-level agent permission/control systems, agentic safety features.
-   - "threats_incidents": Active attacks, data breaches, ransomware, jailbreaks, prompt injection
-     exploits, CVEs, safety failures, vulnerability disclosures, security incidents.
-   - "research_regulation": Academic papers, safety benchmarks, evaluation methods, red-teaming
-     research, AI governance, regulation, policy changes, standards.
+     Only for real-world product/platform news, NOT academic papers.
+   - "research_regulation": Academic papers (ArXiv, conferences), safety benchmarks, evaluation
+     methods, red-teaming research, AI governance, regulation, policy changes, standards.
+     ALL academic/research papers MUST go here regardless of topic.
 3. summary (2-3 sentences): Key facts, technical details, and implications
 4. why_important (1 sentence): Why this specifically matters for AI safety research at Huawei
 
@@ -379,6 +382,13 @@ def _dedup_by_event(
     return kept
 
 
+def _is_research_source(article: Article) -> bool:
+    """Check if an article comes from a research/academic source (e.g., ArXiv)."""
+    source_lower = article.source.lower()
+    url_lower = article.url.lower()
+    return "arxiv" in source_lower or "arxiv.org" in url_lower
+
+
 def _distribute_across_sections(
     scored_results: list[tuple[float, int, dict]],
     articles: list[Article],
@@ -387,23 +397,35 @@ def _distribute_across_sections(
     """
     Distribute top articles across digest sections.
 
-    Ensures soft minimums per section are met first, then fills remaining
-    slots by score. Total output is top_n articles.
+    Rules:
+    - Research/academic sources (ArXiv) always go to research_regulation
+    - Soft minimums per section are filled first
+    - Hard max per section is enforced (e.g., research capped at 5)
+    - Remaining slots filled by score
+    - Total output is top_n articles
     """
     valid_sections = set(DIGEST_SECTIONS.keys())
 
-    # Group results by section
+    # Group results by section, forcing research sources into research_regulation
     by_section: dict[str, list[tuple[float, int, dict]]] = {s: [] for s in valid_sections}
     for score, idx, llm_result in scored_results:
-        section = llm_result.get("section", "")
-        if section not in valid_sections:
-            # Default to research_regulation for uncategorized
+        if idx < len(articles) and _is_research_source(articles[idx]):
             section = "research_regulation"
+        else:
+            section = llm_result.get("section", "")
+            if section not in valid_sections:
+                section = "research_regulation"
         by_section[section].append((score, idx, llm_result))
 
     # Sort each section by score
     for section in by_section:
         by_section[section].sort(key=lambda x: x[0], reverse=True)
+
+    # Enforce hard max per section (trim before distribution)
+    for section_id, section_def in DIGEST_SECTIONS.items():
+        max_count = section_def.get("max_articles")
+        if max_count is not None and len(by_section[section_id]) > max_count:
+            by_section[section_id] = by_section[section_id][:max_count]
 
     # Phase 1: Fill soft minimums for each section
     selected: list[tuple[float, int, dict, str]] = []  # (score, idx, llm_result, section)
@@ -411,6 +433,7 @@ def _distribute_across_sections(
 
     for section_id, section_def in DIGEST_SECTIONS.items():
         min_count = section_def["min_articles"]
+        max_count = section_def.get("max_articles")
         section_items = by_section[section_id]
         for i, item in enumerate(section_items):
             if i < min_count:
@@ -418,10 +441,25 @@ def _distribute_across_sections(
             else:
                 remaining.append((*item, section_id))
 
-    # Phase 2: Fill remaining slots by score (highest first)
+    # Phase 2: Fill remaining slots by score, respecting hard max
     slots_left = top_n - len(selected)
     remaining.sort(key=lambda x: x[0], reverse=True)
-    selected.extend(remaining[:slots_left])
+
+    # Count how many are already selected per section
+    section_counts: dict[str, int] = {}
+    for _, _, _, sec in selected:
+        section_counts[sec] = section_counts.get(sec, 0) + 1
+
+    for item in remaining:
+        if slots_left <= 0:
+            break
+        sec = item[3]
+        max_count = DIGEST_SECTIONS[sec].get("max_articles")
+        if max_count is not None and section_counts.get(sec, 0) >= max_count:
+            continue
+        selected.append(item)
+        section_counts[sec] = section_counts.get(sec, 0) + 1
+        slots_left -= 1
 
     # Build RankedArticle list, ordered by section then by score within section
     ranked = []
