@@ -29,6 +29,11 @@ class RankedArticle(BaseModel):
 
 # Ordered section definitions for the digest
 DIGEST_SECTIONS = {
+    "threats_incidents": {
+        "title": "Threats & Incidents",
+        "description": "Active attacks, breaches, jailbreaks, CVEs, safety failures, vulnerability disclosures",
+        "min_articles": 2,
+    },
     "ai_security_industry": {
         "title": "AI Security from Major Players",
         "description": "AI safety/security announcements, tools, features, and guardrail releases from major companies",
@@ -39,11 +44,6 @@ DIGEST_SECTIONS = {
         "description": "Agent features from Apple/Android/Windows/HarmonyOS, agent frameworks, platform-level agent controls",
         "min_articles": 0,
         "empty_message": "No significant developments today.",
-    },
-    "threats_incidents": {
-        "title": "Threats & Incidents",
-        "description": "Active attacks, breaches, jailbreaks, CVEs, safety failures, vulnerability disclosures",
-        "min_articles": 2,
     },
     "research_regulation": {
         "title": "Research & Regulation",
