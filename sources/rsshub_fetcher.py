@@ -9,12 +9,14 @@ from sources.rss_fetcher import RSSFetcher
 
 logger = logging.getLogger(__name__)
 
-# Fallback public RSSHub instances (tried in order when primary fails)
+# Fallback public RSSHub instances (tried in order when primary fails).
+# Used when a local/self-hosted instance is unavailable (e.g., local dev).
+# Public instances are unreliable — prefer the GitHub Actions service container.
 RSSHUB_FALLBACK_INSTANCES = [
+    "https://rsshub.rssforever.com",
     "https://hub.slarker.me",
+    "https://rsshub.pseudoyu.com",
     "https://rsshub.qufy.me",
-    "https://rsshub.wkfg.me",
-    "https://rss.shab.fun",
 ]
 
 

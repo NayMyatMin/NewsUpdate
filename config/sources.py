@@ -138,7 +138,7 @@ RSSHUB_ROUTES = [
 
     # --- Cybersecurity ---
     {"route": "/anquanke/category/web安全", "source": "Anquanke (安全客)", "lang": "zh"},
-    {"route": "/hackernews/best", "source": "HN Best Stories", "lang": "en"},
+    # HN Best Stories removed — already covered by hnrss.org/frontpage in RSS_FEEDS
 
     # --- Video/Social platforms (tech channels) ---
     {"route": "/bilibili/ranking/technology/0/3", "source": "Bilibili Tech (B站科技)", "lang": "zh"},

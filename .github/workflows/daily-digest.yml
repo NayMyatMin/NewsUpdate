@@ -14,6 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    services:
+      rsshub:
+        image: diygod/rsshub
+        ports:
+          - 1200:1200
+        env:
+          # Reduce anti-bot failures on Chinese platforms
+          REQUEST_TIMEOUT: 10000
+          CACHE_EXPIRE: 600
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -45,7 +55,7 @@ jobs:
           L2_ANTHROPIC_MODEL: ${{ secrets.L2_ANTHROPIC_MODEL || 'claude-sonnet-4-20250514' }}
           EMBEDDING_MODEL: ${{ secrets.EMBEDDING_MODEL || 'text-embedding-3-small' }}
           NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
-          RSSHUB_BASE_URL: ${{ secrets.RSSHUB_BASE_URL || 'https://rsshub.app' }}
+          RSSHUB_BASE_URL: ${{ secrets.RSSHUB_BASE_URL || 'http://localhost:1200' }}
         run: mkdir -p logs && python main.py 2>&1 | tee logs/run.log
 
       - name: Commit and push digest
