@@ -1,8 +1,6 @@
 # NewsUpdate Agent
 
-Daily tech news digest powered by AI. Fetches 1,500+ articles from 110 sources (international + Chinese), deduplicates, filters by relevance, and uses an LLM to rank and summarize the top 15 things you need to know.
-
-Built for staying current on AI, cybersecurity, LLMs, AI agents, cloud, hardware, and general tech — from both international and Chinese domestic sources.
+Daily AI safety news digest powered by LLM analysis. Fetches 1,800+ articles from 110+ sources (international + Chinese), filters by freshness, deduplicates, and uses a two-tier LLM pipeline to rank and summarize the top 15 articles — organized into thematic sections for an AI Safety researcher.
 
 ## Quick Start
 
@@ -30,6 +28,21 @@ python main.py --dry-run --top 5  # Quick preview, no API call
 
 Output is saved to `digests/YYYY-MM-DD.md`.
 
+## Digest Sections
+
+The digest is organized into 4 thematic sections (in this order):
+
+| Section | What goes in it | Limits |
+|---|---|---|
+| **Threats & Incidents** | Active attacks, breaches, jailbreaks, CVEs, safety failures | Min 2 |
+| **AI Security from Major Players** | Safety/security announcements, tools, guardrails from Google, OpenAI, Meta, etc. | Min 2 |
+| **AI Agents & OS Integration** | Agent features from Apple/Android/Windows/HarmonyOS, agent frameworks | Shows "No significant developments" if empty |
+| **Research & Regulation** | Papers, benchmarks, standards, governance, policy | Min 2, Max 5 |
+
+- **Total: 15 articles**, distributed by importance across sections
+- Academic/ArXiv papers are always routed to Research & Regulation (never in Threats or Industry)
+- Only real-world news appears in Threats & Incidents and AI Security sections
+
 ## Configuration
 
 All config lives in `.env` (or GitHub Secrets for CI):
@@ -55,38 +68,47 @@ L2_ENABLED=true                   # Set false to use L1 model for everything
 # Embedding model for cross-lingual deduplication
 EMBEDDING_MODEL=text-embedding-3-small
 
-# RSSHub base URL (default: https://rsshub.app, auto-fallback on 403)
-# RSSHUB_BASE_URL=https://rsshub.app
+# RSSHub (auto-hosted in GitHub Actions, fallback to public instances locally)
+# RSSHUB_BASE_URL=http://localhost:1200
 
 # Optional: NewsAPI.org for extra international coverage
 # NEWSAPI_KEY=xxxxx
+
+# Pipeline tuning
+# MAX_ARTICLE_AGE_HOURS=48         # Discard articles older than this (default: 48)
+# MAX_FULLTEXT_LENGTH=2000         # Max chars fetched for L2 full-text enrichment
 ```
 
 ## How It Works
 
 ```
-Fetch (110 source configs, async)
-  → 1,500+ raw articles
-    → Deduplicate (URL + cross-lingual embeddings)
-      → ~1,300 unique
-        → Keyword relevance filter (17 topic clusters)
-          → Top 80 candidates
-            → L1 LLM screening (fast model)
-              → Top 25 finalists
-                → L2 LLM deep analysis (8K token budget, backfill guarantee)
-                  → Top 15 digest (always 15 — never truncated)
+Fetch (110+ source configs, async)
+  → 1,800+ raw articles
+    → Freshness filter (drop articles older than 48h)
+      → ~1,700 fresh
+        → Deduplicate (URL + cross-lingual embeddings)
+          → ~1,500 unique
+            → Keyword relevance filter (17 topic clusters)
+              → Top 80 candidates
+                → L1 LLM screening (fast model)
+                  → Top 25 finalists
+                    → Full-text content fetch (enrich L2 input)
+                      → L2 LLM deep analysis + section categorization
+                        → Top 15 digest (4 thematic sections)
 ```
 
-**Pipeline stages:**
+**Pipeline stages (6 steps):**
 
 | Stage | What it does | Cost |
 |---|---|---|
 | Fetch | Async RSS/scraping from all sources | Free |
+| Freshness | Drop articles older than 48h | Free |
 | Dedup | URL + cross-lingual embedding similarity | ~$0.01/day |
 | Filter | Keyword matching across 17 topic clusters | Free |
 | L1 Screen | Fast LLM scores and filters top candidates | ~$0.02/day |
-| L2 Rank | Stronger LLM deep-analyzes and ranks top articles | ~$0.05/day |
-| Output | Markdown file + terminal display | Free |
+| Full-text | Fetch article body for L2 candidates (up to 2000 chars) | Free |
+| L2 Rank | Stronger LLM deep-analyzes, categorizes into sections, and ranks | ~$0.05/day |
+| Output | Sectioned Markdown file + terminal display | Free |
 
 ## Sources
 
@@ -118,10 +140,10 @@ AI安全, 大模型安全, 人工智能治理, 华为AI, AI智能体, 大语言�
 **Direct feeds:**
 Seebug Paper, Xianzi (先知社区), InfoQ China
 
-**RSSHub (14 routes, auto-fallback across 4 public instances):**
+**RSSHub (13 routes via self-hosted container in CI):**
 CLS Telegraph (财联社), 36Kr, The Paper (澎湃), Zhihu, V2EX, Jiqizhixin (机器之心), Leiphone (雷锋网), Anquanke (安全客), Bilibili Tech, Weibo
 
-> RSSHub routes automatically try fallback instances (`hub.slarker.me`, `rsshub.qufy.me`, `rsshub.wkfg.me`, `rss.shab.fun`) when the primary instance returns 403 or is unreachable. Failed routes log a single warning instead of per-attempt noise.
+> In GitHub Actions, RSSHub runs as a service container (`diygod/rsshub`) for reliable, unthrottled access. Locally, it falls back to public instances.
 
 ## Topic Clusters (17)
 
@@ -131,6 +153,17 @@ CLS Telegraph (财联社), 36Kr, The Paper (澎湃), Zhihu, V2EX, Jiqizhixin (�
 | Medium-High (2.5) | LLMs, AI Agents, Cybersecurity & Incidents, AI Governance |
 | Medium (2.0) | Frontier Models, Mobile/Telecom, Geopolitical AI, AI in Cybersecurity, Cloud & Infra, Privacy & Data |
 | Standard (1.5) | Software & Dev Tools, Blockchain, Quantum Computing, Robotics & Hardware, Big Tech Business |
+
+## Weekly Trend Analysis
+
+At the end of each week, an LLM-powered trend analysis is generated from all daily digests. It includes:
+
+- **Executive Summary** — the week's most significant developments
+- **Key Trends** — emerging patterns with article references
+- **Top 5 Stories** — deepest analysis of the most important stories
+- **Watch List** — developing situations to monitor next week
+
+Falls back to a simple top-5 extraction if the LLM call fails. Output: `digests/<week_folder>/weekly-summary.md`.
 
 ## Cost
 
@@ -142,11 +175,11 @@ CLS Telegraph (财联社), 36Kr, The Paper (澎湃), Zhihu, V2EX, Jiqizhixin (�
 | Anthropic | claude-haiku-4-5 | claude-sonnet-4 | ~$0.10 | ~$3 |
 | Local (Ollama) | any | any | $0 | $0 |
 
-*Costs include embedding API calls for cross-lingual deduplication.*
+*Costs include embedding API calls for cross-lingual deduplication and full-text fetching.*
 
 ## GitHub Actions (Automated Daily Digest)
 
-The included workflow runs the pipeline daily at 07:00 UTC and commits the digest automatically.
+The included workflow runs the pipeline daily at 01:00 UTC (09:00 SGT) with a self-hosted RSSHub service container and commits the digest automatically.
 
 **Setup:**
 1. Go to **Settings → Secrets and variables → Actions**
@@ -170,30 +203,36 @@ crontab -e
 
 ```
 newsupdate/
-├── main.py                         # Entry point — pipeline orchestrator
+├── main.py                         # Entry point — 6-step pipeline orchestrator
 ├── .env                            # API keys and configuration
 ├── requirements.txt                # Python dependencies
 ├── config/
 │   ├── settings.py                 # API keys, model config, thresholds
 │   ├── topics.py                   # 17 topic clusters with EN/ZH keywords
-│   └── sources.py                  # 110 source definitions (RSS, Google News, RSSHub, WeChat)
+│   └── sources.py                  # 110+ source definitions (RSS, Google News, RSSHub, WeChat)
 ├── sources/
 │   ├── rss_fetcher.py              # Async RSS/Atom feed parser
 │   ├── google_news.py              # Google News RSS search (28 queries)
-│   ├── rsshub_fetcher.py           # RSSHub sources with auto-fallback instances
+│   ├── rsshub_fetcher.py           # RSSHub sources with service container + fallback instances
 │   ├── newsapi_fetcher.py          # NewsAPI.org (optional)
-│   └── wechat_scraper.py           # WeChat articles via Sogou search (multi-strategy timestamp extraction)
+│   └── wechat_scraper.py           # WeChat articles via Sogou search
 ├── processing/
+│   ├── freshness_filter.py         # Drop articles older than MAX_ARTICLE_AGE_HOURS
 │   ├── deduplicator.py             # URL + cross-lingual embedding dedup
 │   ├── relevance_filter.py         # Keyword-based pre-filter
-│   └── summarizer.py               # Two-tier LLM ranking (L1 screen + L2 deep analysis)
+│   ├── content_fetcher.py          # Full-text fetcher for L2 candidate enrichment
+│   └── summarizer.py               # Two-tier LLM ranking + section categorization
 ├── output/
-│   ├── formatter.py                # Markdown + terminal formatters
+│   ├── formatter.py                # Sectioned Markdown + terminal formatters
 │   └── file_writer.py              # Save digest to file
 ├── models/
-│   └── article.py                  # Pydantic data models
-├── digests/                        # Daily digest output files
-└── logs/                           # Cron job logs
+│   └── article.py                  # Pydantic data models + digest section definitions
+├── scripts/
+│   ├── generate_weekly_summary.py  # LLM-powered weekly trend analysis
+│   └── organize_digests.sh         # Archive completed weeks into folders
+├── digests/                        # Daily digest output files (organized by week)
+├── tests/                          # Test suite
+└── logs/                           # Run logs
 ```
 
 ## Adding Sources
@@ -244,36 +283,6 @@ OPENAI_API_KEY=ollama
 OPENAI_MODEL=llama3.1
 OPENAI_BASE_URL=http://localhost:11434/v1
 ```
-
-## Recent Improvements
-
-**Two-tier LLM ranking (L1 + L2):**
-- L1 uses a fast/cheap model (e.g. `gpt-4o-mini`) to screen 80 articles down to 25
-- L2 uses a stronger model (e.g. `gpt-4o` or `gpt-5-mini`) for deep analysis and final ranking
-- Set `L2_ENABLED=false` to use a single model for both stages
-
-**Guaranteed top 15 output:**
-- L2 prompt explicitly requires all articles to be returned
-- `max_tokens` increased to 8192 to prevent JSON truncation
-- Any articles the LLM skips are backfilled with L1 scores as fallback
-
-**Cross-lingual embedding deduplication:**
-- Uses OpenAI embeddings (`text-embedding-3-small`) to detect duplicate stories across English and Chinese
-- Catches same-story-different-outlet duplicates that URL dedup misses
-
-**RSSHub fallback resilience:**
-- When the primary RSSHub instance (`rsshub.app`) returns 403 or is unreachable, automatically tries 4 fallback public instances
-- Failed routes log a single clean warning instead of per-attempt noise
-- Removed permanently broken feeds (FreeBuf, The Sequence)
-
-**WeChat timestamp extraction:**
-- 4-strategy extraction: `timeConvert()` script → `data-*` attributes → raw Unix timestamps → current time fallback
-- WeChat articles now always display a publish date in the digest
-
-**GitHub Actions CI/CD:**
-- Automated daily digest at 07:00 UTC with auto-commit to `digests/`
-- Manual trigger via workflow_dispatch
-- All secrets configurable via GitHub Settings
 
 ## License
 
