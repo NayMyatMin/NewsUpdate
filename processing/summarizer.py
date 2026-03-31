@@ -26,42 +26,35 @@ from config.settings import (
     EVENT_DEDUP_THRESHOLD,
     MAX_FULLTEXT_LENGTH,
 )
-from models.article import Article, RankedArticle
+from models.article import Article, RankedArticle, DIGEST_SECTIONS
 from processing.content_fetcher import fetch_full_text
 from processing.deduplicator import _get_embeddings, _cosine_similarity
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a tech news analyst for an AI Safety researcher at Huawei.
-Your job is to evaluate news articles and identify the most important ones across
-ALL areas of technology, security, and AI.
+Your job is to evaluate news articles focused on AI security, AI safety, and related threats.
 
-The researcher needs to stay up-to-date on:
+The researcher primarily cares about:
 - AI safety, alignment, and responsible AI
 - AI security (adversarial attacks, prompt injection, jailbreaking, red teaming)
-- Large language models and frontier AI development
-- AI agents and agentic AI systems
+- Cybersecurity incidents affecting AI systems or infrastructure
+- AI agents: safety failures, frameworks, OS-level integrations
 - AI governance, regulation, and policy (China and international)
-- Huawei ecosystem (HarmonyOS, Ascend, MindSpore, Kunpeng)
-- Geopolitical AI competition (US-China, chip export controls)
-- Cybersecurity: data breaches, ransomware, zero-days, APTs, security incidents
-- Vulnerability disclosures, CVEs, exploit chains, patch advisories
-- Cloud computing, infrastructure, DevOps, Kubernetes
-- Mobile/telecom AI and on-device AI
-- Open-source AI models (DeepSeek, Qwen, LLaMA, etc.)
-- Software development tools, programming languages, open source
-- Privacy, data protection, surveillance tech
-- Quantum computing, blockchain, robotics, hardware
-- Big tech company moves, acquisitions, major product launches
+- Research: safety evaluation, benchmarks, red-teaming methods, alignment techniques
+
+The researcher is LESS interested in:
+- General industry moves (chip launches, business strategy, earnings) UNLESS they
+  directly relate to AI safety or security
+- General tech news without an AI safety/security angle
 
 Be especially attentive to:
 1. Breaking security incidents and active exploits (highest urgency)
 2. Breaking developments that shift the AI safety landscape
 3. New vulnerabilities or attack methods (on AI systems or general infra)
-4. Regulatory changes in China or internationally
-5. Huawei-specific news and competitor moves
-6. Major model releases or capability breakthroughs
-7. Critical infrastructure outages or cloud incidents"""
+4. AI agent safety failures and new agent platform features from OS vendors
+5. Regulatory changes in China or internationally
+6. New safety/security research, benchmarks, and evaluation methods"""
 
 # L1: fast screening prompt — only needs a score, no summaries
 L1_PROMPT_TEMPLATE = """Quickly evaluate these {count} news articles. For each, provide ONLY:
@@ -86,21 +79,32 @@ IMPORTANT: You MUST return an entry for ALL {count} articles. Do not skip any.
 
 For each article, provide:
 1. relevance_score (0.0-10.0): Final importance score after deep analysis
-2. summary (2-3 sentences): Key facts, technical details, and implications
-3. why_important (1 sentence): Why this specifically matters for AI safety research at Huawei
+2. section: Categorize into EXACTLY ONE of these sections:
+   - "ai_security_industry": AI safety/security announcements, tools, features, guardrail releases
+     from major companies (Google, OpenAI, Meta, Anthropic, Huawei, Microsoft, Alibaba, ByteDance,
+     DeepSeek, etc.). Only include if the news has a direct AI safety/security angle.
+   - "ai_agents_os": AI agent features from OS platforms (Apple/iOS, Android, Windows, HarmonyOS),
+     agent frameworks, platform-level agent permission/control systems, agentic safety features.
+   - "threats_incidents": Active attacks, data breaches, ransomware, jailbreaks, prompt injection
+     exploits, CVEs, safety failures, vulnerability disclosures, security incidents.
+   - "research_regulation": Academic papers, safety benchmarks, evaluation methods, red-teaming
+     research, AI governance, regulation, policy changes, standards.
+3. summary (2-3 sentences): Key facts, technical details, and implications
+4. why_important (1 sentence): Why this specifically matters for AI safety research at Huawei
 
 Scoring guide:
-- 9-10: Active security incident, critical AI safety breakthrough, major Huawei news, or critical zero-day
-- 7-8: Significant AI advance, new vulnerability/CVE, important regulatory action, major breach
-- 5-6: Notable tech industry news, cloud/infra updates, interesting research
+- 9-10: Active security incident, critical AI safety breakthrough, critical zero-day
+- 7-8: Significant AI safety/security advance, new vulnerability/CVE, important regulatory action
+- 5-6: Notable AI safety-adjacent news, interesting research, minor updates
+- 0-4: Not directly relevant to AI safety/security (score low so it gets filtered out)
 
 Articles:
 {articles_json}
 
 Respond ONLY with a valid JSON array of exactly {count} elements. Each element must have:
-"index", "relevance_score", "summary", "why_important"
+"index", "relevance_score", "section", "summary", "why_important"
 
-Example: [{{"index": 0, "relevance_score": 8.5, "summary": "...", "why_important": "..."}}]"""
+Example: [{{"index": 0, "relevance_score": 8.5, "section": "threats_incidents", "summary": "...", "why_important": "..."}}]"""
 
 
 def _format_articles_for_prompt(articles: list[Article], max_snippet: int = 300) -> str:
@@ -375,6 +379,85 @@ def _dedup_by_event(
     return kept
 
 
+def _distribute_across_sections(
+    scored_results: list[tuple[float, int, dict]],
+    articles: list[Article],
+    top_n: int,
+) -> list[RankedArticle]:
+    """
+    Distribute top articles across digest sections.
+
+    Ensures soft minimums per section are met first, then fills remaining
+    slots by score. Total output is top_n articles.
+    """
+    valid_sections = set(DIGEST_SECTIONS.keys())
+
+    # Group results by section
+    by_section: dict[str, list[tuple[float, int, dict]]] = {s: [] for s in valid_sections}
+    for score, idx, llm_result in scored_results:
+        section = llm_result.get("section", "")
+        if section not in valid_sections:
+            # Default to research_regulation for uncategorized
+            section = "research_regulation"
+        by_section[section].append((score, idx, llm_result))
+
+    # Sort each section by score
+    for section in by_section:
+        by_section[section].sort(key=lambda x: x[0], reverse=True)
+
+    # Phase 1: Fill soft minimums for each section
+    selected: list[tuple[float, int, dict, str]] = []  # (score, idx, llm_result, section)
+    remaining: list[tuple[float, int, dict, str]] = []
+
+    for section_id, section_def in DIGEST_SECTIONS.items():
+        min_count = section_def["min_articles"]
+        section_items = by_section[section_id]
+        for i, item in enumerate(section_items):
+            if i < min_count:
+                selected.append((*item, section_id))
+            else:
+                remaining.append((*item, section_id))
+
+    # Phase 2: Fill remaining slots by score (highest first)
+    slots_left = top_n - len(selected)
+    remaining.sort(key=lambda x: x[0], reverse=True)
+    selected.extend(remaining[:slots_left])
+
+    # Build RankedArticle list, ordered by section then by score within section
+    ranked = []
+    rank = 1
+    for section_id in DIGEST_SECTIONS:
+        section_articles = [
+            (score, idx, llm_result) for score, idx, llm_result, sec in selected
+            if sec == section_id
+        ]
+        section_articles.sort(key=lambda x: x[0], reverse=True)
+        for score, idx, llm_result in section_articles:
+            if idx < len(articles):
+                a = articles[idx]
+                ranked.append(RankedArticle(
+                    title=a.title,
+                    url=a.url,
+                    source=a.source,
+                    language=a.language,
+                    published=a.published,
+                    rank=rank,
+                    relevance_score=score,
+                    summary=llm_result.get("summary", a.snippet or ""),
+                    why_important=llm_result.get("why_important", ""),
+                    section=section_id,
+                    topic_matches=a.topic_matches,
+                ))
+                rank += 1
+
+    section_counts = {}
+    for a in ranked:
+        section_counts[a.section] = section_counts.get(a.section, 0) + 1
+    logger.info(f"Section distribution: {section_counts}")
+
+    return ranked
+
+
 async def summarize_and_rank(
     articles: list[Article],
     top_n: int = 15,
@@ -447,25 +530,10 @@ async def summarize_and_rank(
         l2_results, articles, similarity_threshold=EVENT_DEDUP_THRESHOLD
     )
 
-    # Build final ranked articles
-    ranked = []
-    for rank, (score, idx, llm_result) in enumerate(l2_results[:top_n], 1):
-        if idx < len(articles):
-            a = articles[idx]
-            ranked.append(RankedArticle(
-                title=a.title,
-                url=a.url,
-                source=a.source,
-                language=a.language,
-                published=a.published,
-                rank=rank,
-                relevance_score=score,
-                summary=llm_result.get("summary", a.snippet or ""),
-                why_important=llm_result.get("why_important", ""),
-                topic_matches=a.topic_matches,
-            ))
+    # Build sectioned ranked articles (15 total, disproportionate across sections)
+    ranked = _distribute_across_sections(l2_results, articles, top_n)
 
-    logger.info(f"Two-tier ranking complete: returning top {len(ranked)} articles")
+    logger.info(f"Two-tier ranking complete: returning {len(ranked)} articles across sections")
     return ranked
 
 
@@ -488,6 +556,7 @@ def _fallback_rank(articles: list[Article], top_n: int) -> list[RankedArticle]:
             relevance_score=score,
             summary=a.snippet or "(No summary - API key not configured)",
             why_important="Ranked by keyword matching only.",
+            section="research_regulation",  # Default section for fallback
             topic_matches=a.topic_matches,
         ))
     return ranked

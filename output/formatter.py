@@ -1,9 +1,18 @@
 from datetime import datetime, timezone
-from models.article import RankedArticle, Digest
+from models.article import RankedArticle, Digest, DIGEST_SECTIONS
+
+
+def _group_by_section(articles: list[RankedArticle]) -> dict[str, list[RankedArticle]]:
+    """Group articles by their section, preserving section order."""
+    groups: dict[str, list[RankedArticle]] = {s: [] for s in DIGEST_SECTIONS}
+    for article in articles:
+        section = article.section if article.section in DIGEST_SECTIONS else "research_regulation"
+        groups[section].append(article)
+    return groups
 
 
 def format_digest_markdown(digest: Digest) -> str:
-    """Format the digest as a Markdown document."""
+    """Format the digest as a Markdown document with thematic sections."""
     lines = [
         f"# AI Safety News Digest — {digest.date}",
         "",
@@ -20,29 +29,41 @@ def format_digest_markdown(digest: Digest) -> str:
         "",
     ]
 
-    for article in digest.top_articles:
-        pub_str = ""
-        if article.published:
-            pub_str = f" | {article.published.strftime('%Y-%m-%d %H:%M UTC')}"
+    grouped = _group_by_section(digest.top_articles)
 
-        lines.extend([
-            f"## {article.rank}. [{article.title}]({article.url})",
-            f"**Source:** {article.source}{pub_str} | "
-            f"**Relevance:** {article.relevance_score:.1f}/10",
-            "",
-            f"> {article.summary}",
-            "",
-        ])
+    for section_id, section_def in DIGEST_SECTIONS.items():
+        section_articles = grouped[section_id]
+        lines.append(f"# {section_def['title']}")
+        lines.append("")
 
-        if article.why_important:
-            lines.append(f"**Why it matters:** {article.why_important}")
-            lines.append("")
+        if not section_articles:
+            empty_msg = section_def.get("empty_message", "No articles in this section today.")
+            lines.extend([f"*{empty_msg}*", "", "---", ""])
+            continue
 
-        if article.topic_matches:
-            tags = ", ".join(article.topic_matches)
-            lines.append(f"*Topics: {tags}*")
+        for article in section_articles:
+            pub_str = ""
+            if article.published:
+                pub_str = f" | {article.published.strftime('%Y-%m-%d %H:%M UTC')}"
 
-        lines.extend(["", "---", ""])
+            lines.extend([
+                f"### {article.rank}. [{article.title}]({article.url})",
+                f"**Source:** {article.source}{pub_str} | "
+                f"**Relevance:** {article.relevance_score:.1f}/10",
+                "",
+                f"> {article.summary}",
+                "",
+            ])
+
+            if article.why_important:
+                lines.append(f"**Why it matters:** {article.why_important}")
+                lines.append("")
+
+            if article.topic_matches:
+                tags = ", ".join(article.topic_matches)
+                lines.append(f"*Topics: {tags}*")
+
+            lines.extend(["", "---", ""])
 
     lines.extend([
         "",
@@ -53,7 +74,7 @@ def format_digest_markdown(digest: Digest) -> str:
 
 
 def format_digest_terminal(digest: Digest) -> str:
-    """Format a concise terminal-friendly output."""
+    """Format a concise terminal-friendly output with sections."""
     lines = [
         f"\n{'='*70}",
         f"  AI SAFETY NEWS DIGEST — {digest.date}",
@@ -63,15 +84,28 @@ def format_digest_terminal(digest: Digest) -> str:
         f"{'='*70}\n",
     ]
 
-    for article in digest.top_articles:
-        score_bar = "█" * int(article.relevance_score) + "░" * (10 - int(article.relevance_score))
-        lines.extend([
-            f"  [{article.rank:2d}] {score_bar} {article.relevance_score:.1f}/10",
-            f"      {article.title}",
-            f"      {article.source}",
-            f"      {article.summary}",
-            f"      → {article.url}",
-            "",
-        ])
+    grouped = _group_by_section(digest.top_articles)
+
+    for section_id, section_def in DIGEST_SECTIONS.items():
+        section_articles = grouped[section_id]
+        lines.append(f"  {'─'*66}")
+        lines.append(f"  ■ {section_def['title'].upper()}")
+        lines.append(f"  {'─'*66}")
+
+        if not section_articles:
+            empty_msg = section_def.get("empty_message", "No articles in this section today.")
+            lines.extend([f"    {empty_msg}", ""])
+            continue
+
+        for article in section_articles:
+            score_bar = "█" * int(article.relevance_score) + "░" * (10 - int(article.relevance_score))
+            lines.extend([
+                f"  [{article.rank:2d}] {score_bar} {article.relevance_score:.1f}/10",
+                f"      {article.title}",
+                f"      {article.source}",
+                f"      {article.summary}",
+                f"      → {article.url}",
+                "",
+            ])
 
     return "\n".join(lines)
