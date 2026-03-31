@@ -24,8 +24,10 @@ from config.settings import (
     L2_ANTHROPIC_MODEL,
     L1_PASS_COUNT,
     EVENT_DEDUP_THRESHOLD,
+    MAX_FULLTEXT_LENGTH,
 )
 from models.article import Article, RankedArticle
+from processing.content_fetcher import fetch_full_text
 from processing.deduplicator import _get_embeddings, _cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -264,8 +266,8 @@ async def _run_l2_deep_analysis(
         l2_model = OPENAI_MODEL if LLM_PROVIDER == "openai" else ANTHROPIC_MODEL
         logger.info(f"L2 disabled, using L1 model {l2_model} for summaries")
 
-    # L2 gets full snippet for deeper analysis
-    articles_json = _format_articles_for_prompt(articles, max_snippet=500)
+    # L2 gets full-text content for deeper analysis
+    articles_json = _format_articles_for_prompt(articles, max_snippet=MAX_FULLTEXT_LENGTH)
 
     prompt = L2_PROMPT_TEMPLATE.format(
         count=len(articles),
@@ -416,6 +418,21 @@ async def summarize_and_rank(
     l2_articles = [articles[idx] for _, idx in l1_survivors]
     l2_orig_indices = [idx for _, idx in l1_survivors]
     l2_l1_scores = [score for score, _ in l1_survivors]
+
+    # --- Fetch full-text content for L2 candidates ---
+    try:
+        full_texts = await fetch_full_text(l2_articles)
+        enriched_count = 0
+        for article in l2_articles:
+            if article.url in full_texts:
+                article.snippet = full_texts[article.url]
+                enriched_count += 1
+        logger.info(
+            f"Full-text fetch: {enriched_count}/{len(l2_articles)} articles enriched, "
+            f"{len(l2_articles) - enriched_count} using original snippet"
+        )
+    except Exception as e:
+        logger.warning(f"Full-text fetch failed, using original snippets: {e}")
 
     # --- L2: Deep analysis ---
     l2_results = await _run_l2_deep_analysis(
