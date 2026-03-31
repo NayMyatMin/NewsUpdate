@@ -23,7 +23,34 @@ class RankedArticle(BaseModel):
     relevance_score: float = 0.0
     summary: str = ""
     why_important: str = ""
+    section: str = ""  # One of DIGEST_SECTIONS keys
     topic_matches: list[str] = Field(default_factory=list)
+
+
+# Ordered section definitions for the digest
+DIGEST_SECTIONS = {
+    "ai_security_industry": {
+        "title": "AI Security from Major Players",
+        "description": "AI safety/security announcements, tools, features, and guardrail releases from major companies",
+        "min_articles": 2,
+    },
+    "ai_agents_os": {
+        "title": "AI Agents & OS Integration",
+        "description": "Agent features from Apple/Android/Windows/HarmonyOS, agent frameworks, platform-level agent controls",
+        "min_articles": 0,
+        "empty_message": "No significant developments today.",
+    },
+    "threats_incidents": {
+        "title": "Threats & Incidents",
+        "description": "Active attacks, breaches, jailbreaks, CVEs, safety failures, vulnerability disclosures",
+        "min_articles": 2,
+    },
+    "research_regulation": {
+        "title": "Research & Regulation",
+        "description": "Papers, benchmarks, safety standards, governance, policy changes",
+        "min_articles": 2,
+    },
+}
 
 
 class Digest(BaseModel):
