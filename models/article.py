@@ -49,6 +49,7 @@ DIGEST_SECTIONS = {
         "title": "Research & Regulation",
         "description": "Papers, benchmarks, safety standards, governance, policy changes",
         "min_articles": 2,
+        "max_articles": 5,
     },
 }
 
