@@ -45,7 +45,7 @@ jobs:
 
       - name: Generate daily digest
         env:
-          LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
+          LLM_PROVIDER: ${{ secrets.LLM_PROVIDER || 'openai' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o-mini' }}
           L2_ENABLED: ${{ secrets.L2_ENABLED || 'true' }}
